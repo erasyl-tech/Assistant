@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="kk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Тестке күту</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center">
+    <div id="waitingArea" class="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full mx-4 text-center">
+        <div class="animate-pulse mb-6">
+            <div class="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto">
+                <svg class="w-10 h-10 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+            </div>
+        </div>
+        <h2 id="testName" class="text-2xl font-bold text-gray-800 mb-2">Тестке қосылу</h2>
+        <p class="text-gray-500 mb-4">Сіз <span id="sessionCodeDisplay" class="font-bold text-blue-600"></span> кодына қосылдыңыз</p>
+        <p class="text-gray-500 mb-4">Админ тестті бастағанша күтіңіз...</p>
+        <div class="mt-6 text-gray-500 text-sm">Қосылған қатысушылар: <span id="participantCount">0</span></div>
+    </div>
+    
+    <div id="testArea" class="hidden w-full max-w-3xl mx-auto p-4">
+        <div class="bg-white rounded-2xl shadow-xl overflow-hidden">
+            <div class="bg-gradient-to-r from-blue-600 to-purple-600 p-4 text-white">
+                <div class="flex justify-between items-center">
+                    <h2 id="testTitle" class="text-xl font-bold"></h2>
+                    <div class="text-right">
+                        <div class="text-2xl font-bold" id="timerDisplay">00:00</div>
+                        <div class="text-xs opacity-80">уақыт</div>
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <div class="w-full bg-white bg-opacity-30 rounded-full h-2">
+                        <div id="progressFill" class="bg-white h-2 rounded-full" style="width: 0%"></div>
+                    </div>
+                    <div class="text-xs mt-1 text-right" id="questionCounter">Сұрақ 0 / 0</div>
+                </div>
+            </div>
+            
+            <div class="p-6">
+                <h3 id="questionText" class="text-lg font-semibold text-gray-800 mb-6">Сұрақ мәтіні</h3>
+                <div id="optionsContainer" class="space-y-3 mb-8"></div>
+                
+                <div class="flex justify-between">
+                    <button id="prevBtn" class="bg-gray-200 text-gray-700 px-6 py-2 rounded-lg disabled:opacity-50" disabled>← Артқа</button>
+                    <button id="nextBtn" class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700">Келесі →</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div id="resultArea" class="hidden bg-white rounded-2xl shadow-xl p-8 max-w-md w-full mx-4 text-center">
+        <div class="text-6xl mb-4">🎉</div>
+        <h2 class="text-2xl font-bold mb-2">Тест аяқталды!</h2>
+        <div class="text-5xl font-bold text-blue-600 my-4" id="finalScore">0%</div>
+        <p id="resultDetail" class="text-gray-600 mb-4"></p>
+        <div id="detailedAnswers" class="text-left max-h-96 overflow-y-auto mb-6"></div>
+        <button onclick="location.href='/'" class="bg-blue-600 text-white px-6 py-3 rounded-lg w-full">Басты бетке оралу</button>
+    </div>
+    
+    <script>
+        let socket = null;
+        let questions = [];
+        let userAnswers = [];
+        let currentIndex = 0;
+        let sessionCode = localStorage.getItem('sessionCode');
+        let userName = localStorage.getItem('participantName');
+        let startTime = null;
+        let timerInterval = null;
+        
+        if (!sessionCode || !userName) {
+            window.location.href = '/';
+        }
+        
+        document.getElementById('sessionCodeDisplay').innerText = sessionCode;
+        
+        socket = io();
+        
+        socket.on('connect', () => {
+            socket.emit('participant-join', { sessionCode, name: userName });
+        });
+        
+        socket.on('join-error', (msg) => {
+            alert(msg);
+            window.location.href = '/';
+        });
+        
+        socket.on('join-success', (data) => {
+            document.getElementById('testName').innerText = data.testName;
+        });
+        
+        socket.on('participants-update', (participants) => {
+            document.getElementById('participantCount').innerHTML = participants.length;
+        });
+        
+        socket.on('test-started', (data) => {
+            startTime = Date.now();
+            document.getElementById('waitingArea').classList.add('hidden');
+            document.getElementById('testArea').classList.remove('hidden');
+            
+            socket.emit('get-questions', { sessionCode });
+        });
+        
+        socket.on('questions-loaded', (data) => {
+            questions = data.questions;
+            userAnswers = new Array(questions.length).fill(null);
+            document.getElementById('testTitle').innerText = data.testName;
+            document.getElementById('questionCounter').innerHTML = `Сұрақ 1 / ${questions.length}`;
+            
+            showQuestion(0);
+            startTimer();
+        });
+        
+        function startTimer() {
+            timerInterval = setInterval(() => {
+                if (startTime) {
+                    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                    const minutes = Math.floor(elapsed / 60);
+                    const seconds = elapsed % 60;
+                    document.getElementById('timerDisplay').innerHTML = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                }
+            }, 1000);
+        }
+        
+        function showQuestion(index) {
+            const q = questions[index];
+            if (!q) return;
+            
+            document.getElementById('questionText').innerHTML = q.text;
+            document.getElementById('questionCounter').innerHTML = `Сұрақ ${index + 1} / ${questions.length}`;
+            
+            const progress = ((index + 1) / questions.length) * 100;
+            document.getElementById('progressFill').style.width = `${progress}%`;
+            
+            const container = document.getElementById('optionsContainer');
+            container.innerHTML = q.options.map((opt, i) => `
+                <div class="option-card border border-gray-200 rounded-xl p-4 flex items-center cursor-pointer hover:bg-gray-50 transition ${userAnswers[index] === i ? 'bg-blue-50 border-blue-500' : ''}"
+                     onclick="selectAnswer(${index}, ${i})">
+                    <div class="w-8 h-8 rounded-full ${userAnswers[index] === i ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'} flex items-center justify-center font-semibold mr-3">
+                        ${String.fromCharCode(65 + i)}
+                    </div>
+                    <span class="text-gray-800">${escapeHtml(opt)}</span>
+                </div>
+            `).join('');
+            
+            document.getElementById('prevBtn').disabled = index === 0;
+            const nextBtn = document.getElementById('nextBtn');
+            if (index === questions.length - 1) {
+                nextBtn.innerHTML = '✅ Аяқтау';
+            } else {
+                nextBtn.innerHTML = 'Келесі →';
+            }
+        }
+        
+        function selectAnswer(qIndex, optIndex) {
+            userAnswers[qIndex] = optIndex;
+            socket.emit('submit-answer', { sessionCode, questionIndex: qIndex, answerIndex: optIndex });
+            showQuestion(currentIndex);
+        }
+        
+        document.getElementById('prevBtn').onclick = () => {
+            if (currentIndex > 0) {
+                currentIndex--;
+                showQuestion(currentIndex);
+            }
+        };
+        
+        document.getElementById('nextBtn').onclick = () => {
+            if (userAnswers[currentIndex] === null) {
+                alert('Жауап таңдаңыз!');
+                return;
+            }
+            
+            if (currentIndex === questions.length - 1) {
+                finishTest();
+            } else {
+                currentIndex++;
+                showQuestion(currentIndex);
+            }
+        };
+        
+        function finishTest() {
+            if (timerInterval) clearInterval(timerInterval);
+            socket.emit('finish-test', { sessionCode });
+        }
+        
+        socket.on('test-result', (data) => {
+            document.getElementById('testArea').classList.add('hidden');
+            document.getElementById('resultArea').classList.remove('hidden');
+            document.getElementById('finalScore').innerHTML = `${data.score}%`;
+            document.getElementById('resultDetail').innerHTML = `${data.correctCount} / ${data.totalQuestions} дұрыс жауап<br>⏱️ ${Math.floor(data.timeSpent / 60)}м ${data.timeSpent % 60}с`;
+            
+            const detailedHtml = data.answers.map((ans, idx) => `
+                <div class="border-b py-3 ${ans.isCorrect ? 'bg-green-50' : 'bg-red-50'} p-2 rounded mb-2">
+                    <div class="font-medium text-sm">${idx + 1}. ${escapeHtml(questions[idx].text)}</div>
+                    <div class="text-sm mt-1">
+                        <span class="text-gray-600">Сіздің жауап: </span>
+                        <span class="${ans.isCorrect ? 'text-green-600' : 'text-red-600'}">${ans.userAnswer || 'Жауап жоқ'}</span>
+                    </div>
+                    ${!ans.isCorrect ? `<div class="text-sm text-green-600">Дұрыс жауап: ${ans.correctAnswer}</div>` : ''}
+                </div>
+            `).join('');
+            
+            document.getElementById('detailedAnswers').innerHTML = detailedHtml;
+        });
+        
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/[&<>]/g, function(m) {
+                if (m === '&') return '&amp;';
+                if (m === '<') return '&lt;';
+                if (m === '>') return '&gt;';
+                return m;
+            });
+        }
+    </script>
+</body>
+</html>
